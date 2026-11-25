@@ -27,6 +27,7 @@ Claude asks one question about the kind of work you have been doing, then opens 
 ## What you get
 
 - Three experiments for this week, with prompts you can copy
+- A character sheet: about 50 specific habits, each with a strength from 0 to 100, how often you did it, and what changed since last time
 - A score from 0 to 4 for eight habits: design before building, ground it first, make Claude prove it, maker and checker, delegate, steer and recover, teach Claude once, build loops
 - Two of your own sessions replayed: one that went well and one that got stuck, with what made the difference
 - What changed since your last run

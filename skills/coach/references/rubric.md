@@ -1,4 +1,4 @@
-# Agentic habits rubric (version 2.1)
+# Agentic habits rubric (version 2.2)
 
 Eight dimensions, each scored 0–4 by `analyze_sessions.py`. The scores are
 heuristics from transcript signals. Treat them as a starting point for the
@@ -130,6 +130,47 @@ progression as source code, then agent, then loop.
 **Push towards:** a `/goal` with a turn limit for long tasks; `/loop` or a
 scheduled routine for recurring chores. For client repositories, check what
 an unattended agent is allowed to run before using automatic approval.
+
+---
+
+## The attribute sheet
+
+Under the eight scores sit about 50 attributes: specific habits, each with a
+strength from 0 to 100. The report shows them as a character sheet, grouped
+by the eight dimensions. They add detail and do not change the eight scores
+or the level.
+
+How strength is worked out:
+
+- **Most attributes** are a share of the sessions where the habit could have
+  shown up (editing sessions, multi-file sessions, or all sessions). Each has
+  a share that counts as fully trained, stored as `full_at_pct`. Strength is
+  the share divided by that target, capped at 100. "Runs the product" is full
+  at 25 % of editing sessions, because nobody needs a browser run for every
+  change. "Reads before editing" is full at 80 %.
+- **Things to avoid** (correction loops, error spirals, compaction) run the
+  other way: 100 at zero, falling to 0 once the share reaches `zero_at_pct`.
+- **Setup attributes** (skills, hooks, custom agents, a personal CLAUDE.md)
+  come from files on disk, not from sessions.
+- With fewer than three applicable sessions the strength is `null` and the
+  report shows "no data".
+
+Ranks: 0 untrained, 1–33 emerging, 34–66 developing, 67–99 strong, 100
+mastered. The "class" in the report is named after the dimension with the
+highest average strength. It is a bit of fun, not a result.
+
+Read them with care:
+
+- They are matched by simple text and tool-name rules. A habit practised in
+  words the rules don't know (another language, an unusual test runner) will
+  read low. If the user says a bar is wrong, believe them.
+- Not every bar should be full. Which attributes matter depends on the work.
+- The targets are judgement calls made for this rubric, not published
+  thresholds. They are in `analyze_sessions.py`, next to each attribute, and
+  are meant to be tuned.
+
+The full list, with what each one looks for, is the `attributes` array in
+`metrics.json` (`name`, `what`, `raw`).
 
 ---
 
