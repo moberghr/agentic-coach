@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agentic-coach v2: analyse your local Claude Code session transcripts.
+agentic-coach v2.2: analyse your local Claude Code session transcripts.
 
 Reads ~/.claude/projects/**/*.jsonl (the transcripts Claude Code keeps on your
 machine), computes habit signals and rule-based scores, and writes them to a
@@ -26,7 +26,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-VERSION = 2
+VERSION = 3
+MIN_SAMPLE = 3  # fewer applicable sessions than this: an attribute gets no strength
 
 EXPLORE_TOOLS = {"Read", "Grep", "Glob", "LS"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
@@ -64,6 +65,35 @@ CORRECTION_RE = re.compile(
 TEACH_PATH_RE = re.compile(
     r"(^|[\\/])(CLAUDE(\.local)?\.md)$|[\\/]\.claude[\\/](skills|rules|agents|commands|output-styles)[\\/]", re.I)
 SPEC_PATH_RE = re.compile(r"(spec|design|adr|requirements|acceptance)[^\\/]*\.md$", re.I)
+SCOPE_RE = re.compile(
+    r"(out\s+of\s+scope|don'?t\s+(change|touch|modify|edit|refactor)|do\s+not\s+(change|touch|modify|edit|refactor)|"
+    r"only\s+(change|touch|edit|modify)|without\s+(changing|touching|breaking)|must\s+not|"
+    r"leave\s+.{0,40}\s+(alone|as\s+is|unchanged)|constraints?\b)", re.I)
+DONE_RE = re.compile(
+    r"(done\s+when|definition\s+of\s+done|acceptance\s+criteria|success\s+(criteria|looks)|"
+    r"expected\s+(result|behaviou?r|output)|should\s+(return|pass|show|print|render|respond)|"
+    r"so\s+that\b|the\s+goal\s+is|finish(ed)?\s+when)", re.I)
+PATH_RE = re.compile(
+    r"(@[\w./\\-]+|[\w.-]+[/\\][\w./\\-]+|\b[\w-]+\.(cs|py|ts|tsx|js|jsx|json|md|sql|yml|yaml|java|go|rs|rb|php|"
+    r"html|css|csproj|sln|toml|xml|sh)\b)", re.I)
+UNDERSTAND_RE = re.compile(
+    r"^\s*(how\s+(does|do|is|are)|explain|where\s+(is|are|does)|why\s+(does|is|do)|what\s+(does|is|are)|"
+    r"walk\s+me\s+through|help\s+me\s+understand|summari[sz]e|give\s+me\s+an\s+overview|trace)", re.I)
+EVIDENCE_RE = re.compile(
+    r"(show\s+me\s+the\s+(output|result|log|diff)|prove\s+(it|that)|evidence|paste\s+the\s+(output|result)|"
+    r"run\s+it\s+and\s+show|confirm\s+(it|that|they)\s+(works?|pass(es)?)|screenshot|"
+    r"don'?t\s+(just\s+)?(say|claim|tell\s+me))", re.I)
+SECURITY_RE = re.compile(r"(security\s+review|vulnerabilit|owasp|injection|secrets?\s+scan|threat\s+model)", re.I)
+TEST_RE = re.compile(
+    r"\b(pytest|jest|vitest|mocha|karma|playwright|cypress|phpunit|rspec|unittest|dotnet\s+test|go\s+test|"
+    r"cargo\s+test|mvn\s+(test|verify)|gradlew?\s+test|(npm|yarn|pnpm)\s+(run\s+)?test|ng\s+test|make\s+\w*test)\b", re.I)
+BUILD_RE = re.compile(
+    r"\b(dotnet\s+build|tsc|eslint|ruff|mypy|flake8|prettier|go\s+(vet|build)|cargo\s+(build|check|clippy)|"
+    r"(npm|yarn|pnpm)\s+(run\s+)?(build|lint|check|typecheck)|ng\s+(build|lint)|mvn\s+(compile|package)|"
+    r"gradlew?\s+build)\b", re.I)
+DIFF_RE = re.compile(r"\bgit\s+(diff|status|show)\b", re.I)
+DOCS_TOOL_RE = re.compile(r"(context7|docs|learn|documentation)", re.I)
+TASKLIST_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate"}
 COMMAND_NAME_RE = re.compile(r"<command-name>/?([\w:.-]+)</command-name>")
 INTERRUPT_MARK = "[Request interrupted by user"
 COMPACT_MARK = "This session is being continued from a previous conversation"
@@ -143,8 +173,18 @@ def analyse_file(path):
         "turn_tool_counts": [], "last_event": None,
         "spec": False, "goal": False, "diagram": False, "interview": False,
         "review": False, "tdd": False, "teach_edits": 0, "brief_has_check": False,
+        # finer-grained flags behind the attribute sheet
+        "op_scope": False, "op_done": False, "op_paths": False, "op_words": 0,
+        "search_before_edit": False, "verify_before_edit": False, "delegate_before_edit": False,
+        "understand_before_edit": False, "docs_lookup": False,
+        "tests_after_edit": False, "build_after_edit": False, "evidence_ask": False,
+        "verified_last": False, "review_subagent": False, "review_cmd": False, "security": False,
+        "diff_after_edit": False, "parallel_subagents": False, "custom_subagent": False,
+        "skill_used": False, "mcp_used": False, "tasklist": False, "loop_cmd": False,
     }
     seen_edit = seen_explore = False
+    step = last_edit_step = last_verify_step = 0
+    delegates_per_msg = Counter()
     err_streak = 0
     calls_this_turn = 0
 
@@ -181,6 +221,13 @@ def analyse_file(path):
                         s["goal"] = True
                     if base in REVIEW_COMMANDS:
                         s["review"] = True
+                        s["review_cmd"] = True
+                    if base == "security-review":
+                        s["security"] = True
+                    if base in ("loop", "schedule", "batch"):
+                        s["loop_cmd"] = True
+                    if ":" in name:
+                        s["skill_used"] = True
                 if t.startswith(COMPACT_MARK):
                     s["compactions"] += 1
                     continue
@@ -201,6 +248,12 @@ def analyse_file(path):
                     s["review"] = True
                 if TDD_RE.search(t):
                     s["tdd"] = True
+                if EVIDENCE_RE.search(t):
+                    s["evidence_ask"] = True
+                if SECURITY_RE.search(t):
+                    s["security"] = True
+                if not seen_edit and UNDERSTAND_RE.search(t):
+                    s["understand_before_edit"] = True
                 if s["user_turns"] and CORRECTION_RE.search(t):
                     s["corrections"] += 1
                 if calls_this_turn or s["user_turns"]:
@@ -213,6 +266,10 @@ def analyse_file(path):
                     s["first_prompt"] = t
                     s["brief_has_check"] = bool(VERIFY_RE.search(t) or SPEC_RE.search(t) or TDD_RE.search(t)
                                                 or t.lstrip().startswith("/goal"))
+                    s["op_scope"] = bool(SCOPE_RE.search(t))
+                    s["op_done"] = bool(DONE_RE.search(t))
+                    s["op_paths"] = bool(PATH_RE.search(t))
+                    s["op_words"] = len(t.split())
                 s["last_event"] = "prompt"
 
         elif etype == "assistant":
@@ -225,10 +282,21 @@ def analyse_file(path):
                 name = b.get("name", "?")
                 inp = b.get("input") or {}
                 calls_this_turn += 1
+                step += 1
                 s["tool_calls"][name] += 1
                 s["last_event"] = "tool"
                 if name in EXPLORE_TOOLS:
                     seen_explore = True
+                    if name in ("Grep", "Glob") and not seen_edit:
+                        s["search_before_edit"] = True
+                if name in TASKLIST_TOOLS:
+                    s["tasklist"] = True
+                if name == "Skill":
+                    s["skill_used"] = True
+                if name.startswith("mcp__"):
+                    s["mcp_used"] = True
+                if name in ("WebSearch", "WebFetch") or (name.startswith("mcp__") and DOCS_TOOL_RE.search(name)):
+                    s["docs_lookup"] = True
                 if name == "AskUserQuestion":
                     s["interview"] = True
                 if name in DELEGATE_TOOLS:
@@ -236,6 +304,12 @@ def analyse_file(path):
                                          str(inp.get("prompt", ""))[:400])
                     if seen_edit and re.search(r"(review|verif|audit|refute|gaps)", blob, re.I):
                         s["review"] = True
+                        s["review_subagent"] = True
+                    if not seen_edit:
+                        s["delegate_before_edit"] = True
+                    if str(inp.get("subagent_type") or "").lower() not in ("", "general-purpose", "claude"):
+                        s["custom_subagent"] = True
+                    delegates_per_msg[msg.get("id") or id(e)] += 1
                 if name in EDIT_TOOLS:
                     fp = str(inp.get("file_path") or inp.get("notebook_path") or "")
                     body = str(inp.get("content", "")) + str(inp.get("new_string", ""))
@@ -247,6 +321,7 @@ def analyse_file(path):
                         if not seen_edit:
                             s["explore_before_edit"] = seen_explore
                         seen_edit = True
+                        last_edit_step = step
                         if fp:
                             s["edited_files"].add(fp)
                     if fp.lower().endswith((".mmd", ".mermaid", ".puml", ".excalidraw")) or "```mermaid" in body:
@@ -257,13 +332,25 @@ def analyse_file(path):
                         s["verify_cmds"] += 1
                         if seen_edit:
                             s["verify_after_edit"] = True
+                            last_verify_step = step
+                        else:
+                            s["verify_before_edit"] = True
+                    if seen_edit and TEST_RE.search(cmd):
+                        s["tests_after_edit"] = True
+                    if seen_edit and BUILD_RE.search(cmd):
+                        s["build_after_edit"] = True
+                    if seen_edit and DIFF_RE.search(cmd):
+                        s["diff_after_edit"] = True
                     if WORKTREE_RE.search(cmd):
                         s["worktree"] = True
                 if name.startswith("mcp__") and BROWSER_RE.search(name) and seen_edit:
                     s["ran_product"] = True
                     s["verify_after_edit"] = True
+                    last_verify_step = step
     if calls_this_turn:
         s["turn_tool_counts"].append(calls_this_turn)
+    s["verified_last"] = bool(last_edit_step and last_verify_step > last_edit_step)
+    s["parallel_subagents"] = any(v >= 2 for v in delegates_per_msg.values())
     return s
 
 
@@ -505,6 +592,108 @@ def main():
     avg = sum(scores.values()) / len(scores)
     level = 1 if avg < 1.5 else (2 if avg < 2.75 else 3)
 
+    # ---- attribute sheet: ~50 specific habits, each with a strength from 0 to 100 ----
+    def cnt(group, key):
+        return sum(1 for s in group if (key(s) if callable(key) else s[key]))
+
+    attributes = []
+
+    def attr(aid, dim, name, what, num, den, target, unit):
+        """strength = how close the share is to the target share that counts as fully trained."""
+        if den < MIN_SAMPLE:
+            strength, raw = None, "not enough sessions to tell (%d %s)" % (den, unit)
+        else:
+            strength = int(min(100, round(100.0 * (100.0 * num / den) / target)))
+            raw = "%d of %d %s" % (num, den, unit)
+        attributes.append({"id": aid, "dim": dim, "name": name, "what": what, "strength": strength,
+                           "raw": raw, "full_at_pct": target})
+
+    def inv(aid, dim, name, what, bad_n, den, limit, unit):
+        """for things to avoid: full strength at zero, no strength once the share reaches the limit."""
+        if den < MIN_SAMPLE:
+            strength, raw = None, "not enough sessions to tell (%d %s)" % (den, unit.split(" ")[-1])
+        else:
+            strength = int(max(0, round(100 - 100.0 * (100.0 * bad_n / den) / limit)))
+            raw = "%d of %d %s" % (bad_n, den, unit)
+        attributes.append({"id": aid, "dim": dim, "name": name, "what": what, "strength": strength,
+                           "raw": raw, "full_at_pct": None, "zero_at_pct": limit})
+
+    def flat(aid, dim, name, what, strength, raw):
+        attributes.append({"id": aid, "dim": dim, "name": name, "what": what,
+                           "strength": int(max(0, min(100, round(strength)))), "raw": raw, "full_at_pct": None})
+
+    E, B, N = len(edit_s), len(base), n
+    ue, ub = "editing sessions", ("multi-file sessions" if big_s else "editing sessions")
+    goal_s = [s for s in sessions if s["goal"]]
+    deep_s = [s for s in sessions if sum(s["tool_calls"].values()) >= 10]
+    all_prompts = sum(s["user_turns"] for s in sessions)
+    all_corr = sum(s["corrections"] for s in sessions)
+
+    # design
+    attr("brief_check", "design", "Names the check", "Your opening prompt says how the result will be checked", cnt(edit_s, "brief_has_check"), E, 70, ue)
+    attr("brief_done", "design", "States the finish line", "Your opening prompt says what done looks like", cnt(edit_s, "op_done"), E, 60, ue)
+    attr("brief_scope", "design", "Fences the scope", "Your opening prompt says what is out of scope or must not change", cnt(edit_s, "op_scope"), E, 50, ue)
+    attr("brief_paths", "design", "Points at the code", "Your opening prompt names files, folders or paths", cnt(edit_s, "op_paths"), E, 60, ue)
+    attr("brief_depth", "design", "Writes a full brief", "Your opening prompt is 40 words or more", cnt(edit_s, lambda s: s["op_words"] >= 40), E, 60, ue)
+    attr("spec_first", "design", "Starts from a spec", "Bigger changes start from a spec, a goal or an interview", len(designed), B, 65, ub)
+    attr("interview", "design", "Lets Claude interview you", "Claude asked you structured questions before building", cnt(base, "interview"), B, 30, ub)
+    attr("diagram", "design", "Draws the system", "A diagram was asked for or written", cnt(base, "diagram"), B, 20, ub)
+    # explore
+    attr("read_first", "explore", "Reads before editing", "Files were read or searched before the first edit", len(explore_first), E, 80, ue)
+    attr("search_first", "explore", "Searches the codebase", "Grep or Glob ran before the first edit", cnt(edit_s, "search_before_edit"), E, 60, ue)
+    attr("ask_first", "explore", "Asks before building", "You asked how something works before any edit", cnt(edit_s, "understand_before_edit"), E, 40, ue)
+    attr("baseline_tests", "explore", "Runs the tests first", "Tests or a build ran before the first edit", cnt(edit_s, "verify_before_edit"), E, 30, ue)
+    attr("scout_agent", "explore", "Sends a scout", "A subagent investigated before the first edit", cnt(edit_s, "delegate_before_edit"), E, 20, ue)
+    attr("docs_lookup", "explore", "Checks the docs", "Claude searched the web or documentation", cnt(edit_s, "docs_lookup"), E, 20, ue)
+    # verify
+    attr("verify_any", "verify", "Checks after editing", "Tests, a build, lint or the product ran after edits", len(verified), E, 70, ue)
+    attr("verify_tests", "verify", "Runs the tests", "A test command ran after edits", cnt(edit_s, "tests_after_edit"), E, 60, ue)
+    attr("verify_build", "verify", "Builds and lints", "A build, lint or type check ran after edits", cnt(edit_s, "build_after_edit"), E, 50, ue)
+    attr("verify_product", "verify", "Runs the product", "Claude drove a browser or app after edits", len(ran_product), E, 25, ue)
+    attr("verify_tdd", "verify", "Asks for test-first", "You asked for a failing test before the code", cnt(edit_s, "tdd"), E, 25, ue)
+    attr("verify_evidence", "verify", "Asks for evidence", "You asked Claude to show output, not only say it works", cnt(edit_s, "evidence_ask"), E, 30, ue)
+    attr("verify_last", "verify", "Ends on a green check", "The last check ran after the last edit", cnt(edit_s, "verified_last"), E, 60, ue)
+    # review
+    attr("review_any", "review", "Gets a second opinion", "Bigger changes got some review step", len(reviewed), B, 50, ub)
+    attr("review_agent", "review", "Uses a reviewer agent", "A subagent reviewed the change in a fresh context", cnt(base, "review_subagent"), B, 30, ub)
+    attr("review_cmd", "review", "Runs a review command", "/code-review, /simplify, /security-review or similar", cnt(base, "review_cmd"), B, 30, ub)
+    attr("review_security", "review", "Looks at security", "A security review was asked for", cnt(base, "security"), B, 15, ub)
+    attr("review_diff", "review", "Reads the diff", "git diff, status or show ran after edits", cnt(edit_s, "diff_after_edit"), E, 50, ue)
+    # delegate
+    attr("sub_any", "delegate", "Uses subagents", "Sessions that handed work to a subagent", len(delegating), N, 40, "sessions")
+    attr("sub_parallel", "delegate", "Fans out in parallel", "Two or more subagents started in one step", cnt(sessions, "parallel_subagents"), N, 15, "sessions")
+    attr("sub_custom", "delegate", "Uses specialist agents", "A named subagent type, not the general one", cnt(sessions, "custom_subagent"), N, 20, "sessions")
+    attr("par_sessions", "delegate", "Runs sessions side by side", "Sessions that overlapped in time with another", overlapping, N, 30, "sessions")
+    attr("worktrees", "delegate", "Works in worktrees", "git worktree was used", len(worktree), N, 20, "sessions")
+    attr("tasklist", "delegate", "Keeps a task list", "Longer sessions where Claude tracked tasks", cnt(deep_s, "tasklist"), len(deep_s), 50, "sessions with 10+ tool calls")
+    # steer
+    inv("steer_clean", "steer", "Finishes cleanly", "Few sessions stall or loop on corrections", len(bad), N, 30, "sessions stalled or looped")
+    attr("steer_recover", "steer", "Recovers after interrupting", "Interrupted sessions that carried on afterwards", len(recovered), len(interrupted), 90, "interrupted sessions")
+    attr("steer_redirect", "steer", "Redirects early", "Sessions where you interrupted and kept going", len(recovered), N, 20, "sessions")
+    inv("steer_first_time", "steer", "Rarely has to correct", "Few of your prompts are corrections", all_corr, all_prompts, 25, "prompts were corrections")
+    inv("steer_no_loop", "steer", "Avoids correction loops", "Few sessions needed three or more corrections", cnt(sessions, looped), N, 25, "sessions had 3+ corrections")
+    inv("steer_errors", "steer", "Stops error spirals", "Few sessions hit three tool errors in a row", cnt(sessions, lambda s: s["max_error_streak"] >= 3), N, 25, "sessions had an error streak")
+    inv("steer_context", "steer", "Keeps context lean", "Few sessions ran long enough to be compacted", cnt(sessions, lambda s: s["compactions"] > 0), N, 40, "sessions were compacted")
+    # compound
+    attr("md_projects", "compound", "CLAUDE.md in projects", "Projects you worked in that have a CLAUDE.md", proj_with_md, len(proj_setup), 90, "projects")
+    attr("teach_sessions", "compound", "Teaches Claude as you go", "Sessions that edited CLAUDE.md, a rule or a skill", len(teach_sessions), N, 10, "sessions")
+    n_skills = user_setup["skills"] + sum(v["skills"] for v in proj_setup.values())
+    flat("skills_owned", "compound", "Owns skills", "Skills in your user folder or projects (four counts as full)", 25 * n_skills, "%d skills found" % n_skills)
+    attr("skills_used", "compound", "Uses skills", "A skill or plugin command ran", cnt(sessions, "skill_used"), N, 30, "sessions")
+    any_hooks = user_setup["hooks"] or any(v["hooks"] for v in proj_setup.values())
+    flat("hooks", "compound", "Enforces with hooks", "Hooks are configured for you or a project", 100 if any_hooks else 0, "hooks found" if any_hooks else "no hooks found")
+    n_agents = user_setup["agents"] + sum(v["agents"] for v in proj_setup.values())
+    flat("agents_owned", "compound", "Defines custom agents", "Agent files in your user folder or projects (two counts as full)", 50 * n_agents, "%d agent files found" % n_agents)
+    attr("mcp_used", "compound", "Connects tools", "An MCP tool was used", cnt(sessions, "mcp_used"), N, 30, "sessions")
+    flat("md_user", "compound", "Has personal rules", "A CLAUDE.md in your user folder",
+         100 if user_setup["claude_md"] else 0, "found" if user_setup["claude_md"] else "not found")
+    # loops
+    flat("loop_depth", "loops", "Hands over bigger steps", "Median tool calls per prompt (eight counts as full)", 100.0 * med_calls / 8, "median %s tool calls per prompt" % med_calls)
+    attr("loop_long", "loops", "Lets Claude run long", "Sessions with 25 or more tool calls on one prompt", len(long_runs), N, 25, "sessions")
+    attr("loop_goal", "loops", "Sets goals", "Sessions that used /goal", len(goal_s), N, 15, "sessions")
+    attr("loop_recurring", "loops", "Automates recurring work", "Sessions that used /loop, /schedule or /batch", cnt(sessions, "loop_cmd"), N, 10, "sessions")
+    attr("loop_auto", "loops", "Works with automatic approval", "Sessions with automatic approval on", len(auto_sessions), N, 50, "sessions")
+
     # ---- two sessions worth a second look ----
     def label(s):
         return Path(s["cwd"]).name if s["cwd"] else "unknown"
@@ -564,7 +753,8 @@ def main():
         rows = [r for r in load_history(hpath) if r.get("date") != today]
         if rows:
             previous = rows[-1]
-        rows.append({"date": today, "days": a.days, "sessions": n, "level": level, "scores": scores})
+        rows.append({"date": today, "days": a.days, "sessions": n, "level": level, "scores": scores,
+                     "attributes": {x["id"]: x["strength"] for x in attributes}})
         try:
             hpath.parent.mkdir(parents=True, exist_ok=True)
             with open(hpath, "w", encoding="utf-8") as fh:
@@ -577,7 +767,7 @@ def main():
         "version": VERSION,
         "generated": now.isoformat(timespec="seconds"),
         "days": a.days, "sessions": n, "projects": len(projects),
-        "level": level, "scores": scores, "previous": previous,
+        "level": level, "scores": scores, "attributes": attributes, "previous": previous,
         "signals": {
             "edit_sessions": len(edit_s),
             "multi_file_sessions": len(big_s),
@@ -633,6 +823,8 @@ def main():
         json.dump(out, fh, indent=2, default=str)
     print("Analysed %d sessions across %d projects (last %d days)." % (n, len(projects), a.days))
     print("Rule-based level: %d. Scores: %s" % (level, ", ".join("%s=%s" % kv for kv in scores.items())))
+    rated = [x for x in attributes if x["strength"] is not None]
+    print("Attributes: %d, of which %d have enough data." % (len(attributes), len(rated)))
     if previous:
         print("Previous run: %s (level %s)." % (previous.get("date"), previous.get("level")))
     for k, v in examples.items():

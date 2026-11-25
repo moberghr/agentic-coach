@@ -4,7 +4,7 @@ description: Analyse my local Claude Code sessions and coach me towards how expe
 disable-model-invocation: true
 ---
 
-# Agentic coach (version 2.1)
+# Agentic coach (version 2.2)
 
 You are coaching a mid-level engineer who wants to get more out of Claude Code.
 The goal is to move them from typing one instruction at a time towards how
@@ -48,6 +48,13 @@ personal data from transcripts in your answer.
    Look at the raw `signals`, not only the scores. Read `verify`, `review`
    and `loops` together: long autonomous runs with weak verification are a
    risk, not a strength. If `previous` is present, note which scores moved.
+
+   Then read `attributes`: about 50 specific habits, each with a `strength`
+   from 0 to 100 and a `raw` count. The report shows them as a character
+   sheet without any help from you. Use them to be specific: the eight
+   scores say which area is weak, the attributes say which habit inside it.
+   A `strength` of null means too few sessions to tell, so say nothing
+   about that habit.
 
 3. **Look at two real sessions.** `metrics.json` has `examples.strong` and
    `examples.stuck`, each with a `file`. For each one that exists, run:
@@ -103,6 +110,10 @@ personal data from transcripts in your answer.
      four-line brief: what done looks like, the check that proves it, what
      is out of scope, and constraints that must not change.
    - Pick exactly three experiments, aimed at the lowest-scoring dimensions.
+     Inside each, aim at one named attribute that is low and fits the work
+     they told you about, and say its name as the report shows it. Don't
+     push an attribute that makes no sense for their work (worktrees for
+     someone who only reviews, for example).
      At least one must be design-first (a Mermaid graph of the system, an
      interview into SPEC.md, or a `/goal` with a measurable end state, a
      stated check and a turn limit) and at least one must be about proof
@@ -130,8 +141,8 @@ personal data from transcripts in your answer.
    `xdg-open` on Linux) and give them the path.
 
 7. **Finish in the terminal** with three lines: their suggested level, the
-   one habit with the biggest payoff, and what changed since the last run if
-   there was one. Mention that Claude Code's built-in `/insights` command
+   one habit with the biggest payoff (name the attribute), and what changed
+   since the last run if there was one. Mention that Claude Code's built-in `/insights` command
    gives a complementary view of friction points. Offer to build one of the
    `teach_me` explainers now.
 

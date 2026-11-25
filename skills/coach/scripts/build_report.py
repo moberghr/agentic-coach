@@ -45,6 +45,32 @@ DIMENSIONS = [
      "Addy Osmani, Loop Engineering"),
 ]
 
+ARCHETYPES = {
+    "design": ("The Architect", "You think before you build: briefs, specs and finish lines."),
+    "explore": ("The Scout", "You make Claude learn the ground before it changes anything."),
+    "verify": ("The Prover", "You don't take done on trust. You ask for the run."),
+    "review": ("The Reviewer", "You put a second pair of eyes on the work."),
+    "delegate": ("The Conductor", "You hand work out and run things side by side."),
+    "steer": ("The Navigator", "Your sessions stay on course and recover when they drift."),
+    "compound": ("The Teacher", "You teach Claude once, so each session starts ahead of the last."),
+    "loops": ("The Loop Builder", "You hand over big steps and let Claude run."),
+}
+
+
+def rank(v):
+    if v is None:
+        return "No data"
+    if v >= 100:
+        return "Mastered"
+    if v >= 67:
+        return "Strong"
+    if v >= 34:
+        return "Developing"
+    if v >= 1:
+        return "Emerging"
+    return "Untrained"
+
+
 CSS = """
 :root{--bg:#F3F4F8;--soft:#FFFFFF;--ink:#14171C;--muted:#6B7280;--subtle:#8B919C;--border:#D9DCE3;
 --brand:#4F2FE8;--brand-strong:#3F25BA;--accent:#4F2FE8;--stage:#14171C;--stage-ink:#FFFFFF;--stage-muted:#BAC0CA;
@@ -106,7 +132,23 @@ table{border-collapse:collapse;width:100%;font-size:14px}td{border-top:1px solid
 details summary{cursor:pointer;font-weight:500;margin:24px 0 8px}
 .note{color:var(--muted);font-size:14px;max-width:72ch;margin-top:24px}
 footer{padding:32px 0 48px;color:var(--muted);font-size:13px}
-@media (max-width:700px){.head{grid-template-columns:1fr}.dim button.row{grid-template-columns:28px 1fr auto}.delta{display:none}.body{padding-left:0}.exp{grid-template-columns:28px 1fr}.bar{grid-template-columns:6.5rem 1fr 2.5rem}section{padding:48px 0}}
+.sheet-top{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:24px;margin-bottom:40px}
+.cls{font-weight:600;font-size:clamp(28px,3.4vw,40px);line-height:1.05;letter-spacing:-.02em;margin:0 0 10px}
+.mini{list-style:none;margin:0;padding:0}.mini li{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid var(--border);font-size:15px}
+.mini li b{font-weight:500;font-variant-numeric:tabular-nums}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 24px}
+.chip{all:unset;cursor:pointer;border:1px solid var(--border);border-radius:9999px;padding:6px 14px;font-size:14px}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chip:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.grp{margin-top:36px}.grp-h{display:grid;grid-template-columns:1fr 220px 3.2em;gap:16px;align-items:center;padding-bottom:10px}
+.grp-h h3{margin:0;font-weight:500;font-size:22px}.grp-h .k,.at .rk{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--subtle)}
+.at{display:grid;grid-template-columns:1fr 220px 3.2em 7.5em 3.2em;gap:16px;align-items:center;padding:12px 0;border-top:1px solid var(--border)}
+.at .nm{font-weight:500}.at .wt{display:block;color:var(--muted);font-size:13.5px}.at .rw{display:block;color:var(--subtle);font-size:12.5px;margin-top:2px}
+.meter{height:8px;background:var(--border);position:relative}.meter i{position:absolute;inset:0 auto 0 0;background:var(--magma)}
+.meter.dimm i{background:var(--tint)}.at.nodata .meter{background:repeating-linear-gradient(90deg,var(--border) 0 6px,transparent 6px 10px)}
+.at .v,.grp-h .v{text-align:right;font-variant-numeric:tabular-nums;font-weight:500}
+.at.hide,.grp.hide{display:none}
+@media (max-width:700px){.sheet-top{grid-template-columns:1fr}.grp-h{grid-template-columns:1fr 90px 2.6em}.at{grid-template-columns:1fr 90px 2.6em}.at .rk,.at .delta{display:none}.head{grid-template-columns:1fr}.dim button.row{grid-template-columns:28px 1fr auto}.delta{display:none}.body{padding-left:0}.exp{grid-template-columns:28px 1fr}.bar{grid-template-columns:6.5rem 1fr 2.5rem}section{padding:48px 0}}
 """
 
 JS = """
@@ -114,6 +156,10 @@ document.querySelectorAll('.dim button.row').forEach(function(b){b.addEventListe
 document.querySelectorAll('.copy').forEach(function(b){var label=b.textContent;b.addEventListener('click',function(){var t=document.getElementById(b.dataset.for).textContent;
  function done(m){b.textContent=m;setTimeout(function(){b.textContent=label},1600)}
  try{navigator.clipboard.writeText(t).then(function(){done('Copied')},function(){done('Select the text to copy')})}catch(e){done('Select the text to copy')}});});
+var chips=document.querySelectorAll('.chip');chips.forEach(function(c){c.addEventListener('click',function(){var f=c.dataset.f;
+ chips.forEach(function(x){x.setAttribute('aria-pressed',String(x===c))});
+ document.querySelectorAll('.at').forEach(function(r){r.classList.toggle('hide',f!=='all'&&r.dataset.band!==f)});
+ document.querySelectorAll('.grp').forEach(function(g){g.classList.toggle('hide',!g.querySelector('.at:not(.hide)'))});});});
 var KEY='agentic-coach-done-'+document.body.dataset.run;function ld(){try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){return{}}}
 var st=ld();document.querySelectorAll('.exp input').forEach(function(c){if(st[c.dataset.id]){c.checked=true;c.closest('.exp').classList.add('done')}
  c.addEventListener('change',function(){st[c.dataset.id]=c.checked;c.closest('.exp').classList.toggle('done',c.checked);try{localStorage.setItem(KEY,JSON.stringify(st))}catch(e){}});});
@@ -224,6 +270,57 @@ def main():
         o.append("</div></div>")
     o.append("</div></section>")
 
+    # character sheet
+    attrs = m.get("attributes") or []
+    if attrs:
+        pattrs = prev.get("attributes") or {}
+        rated = [x for x in attrs if x.get("strength") is not None]
+        dim_avg = {}
+        for key, _, _, _, _ in DIMENSIONS:
+            vals = [x["strength"] for x in rated if x.get("dim") == key]
+            dim_avg[key] = round(sum(vals) / len(vals)) if vals else None
+        have = {k: v for k, v in dim_avg.items() if v is not None}
+        top_dim = max(have, key=have.get) if have else None
+        strongest = sorted(rated, key=lambda x: -x["strength"])[:5]
+        weakest = sorted(rated, key=lambda x: x["strength"])[:5]
+        o.append('<section><div class="w"><div class="head"><h2>Your character sheet<span class="dot">.</span></h2>'
+                 '<p>%d specific habits, each with a strength from 0 to 100. A strength of 100 means you do it as often as the rubric counts as fully trained, not in every session. '
+                 '%d have enough sessions behind them to rate.</p></div>' % (len(attrs), len(rated)))
+        o.append('<div class="sheet-top">')
+        if top_dim:
+            nm, line = ARCHETYPES[top_dim]
+            o.append('<div class="card"><span class="k">Your class, for now</span><p class="cls">%s</p><p>%s</p>'
+                     '<p style="font-size:13.5px">Named after your strongest group. It changes as your habits do.</p></div>' % (e(nm), e(line)))
+        o.append('<div class="card"><span class="k">Signature moves</span><ul class="mini">%s</ul></div>'
+                 % "".join("<li><span>%s</span><b>%d</b></li>" % (e(x["name"]), x["strength"]) for x in strongest))
+        o.append('<div class="card"><span class="k">Next to train</span><ul class="mini">%s</ul></div></div>'
+                 % "".join("<li><span>%s</span><b>%d</b></li>" % (e(x["name"]), x["strength"]) for x in weakest))
+        o.append('<div class="chips" role="group" aria-label="Filter habits">'
+                 '<button class="chip" data-f="all" aria-pressed="true">All %d</button>'
+                 '<button class="chip" data-f="high" aria-pressed="false">Strong</button>'
+                 '<button class="chip" data-f="mid" aria-pressed="false">Developing</button>'
+                 '<button class="chip" data-f="low" aria-pressed="false">To train</button>'
+                 '<button class="chip" data-f="none" aria-pressed="false">No data</button></div>' % len(attrs))
+        for key, title, _, _, _ in DIMENSIONS:
+            group = [x for x in attrs if x.get("dim") == key]
+            if not group:
+                continue
+            av = dim_avg[key]
+            o.append('<div class="grp"><div class="grp-h"><h3>%s</h3><span class="meter dimm" role="img" aria-label="%s"><i style="width:%d%%"></i></span><span class="v">%s</span></div>'
+                     % (e(title), "average %s of 100" % av if av is not None else "no data", av or 0, av if av is not None else "–"))
+            for x in group:
+                v = x.get("strength")
+                bandname = "none" if v is None else ("high" if v >= 67 else ("mid" if v >= 34 else "low"))
+                pv = pattrs.get(x["id"])
+                o.append('<div class="at%s" data-band="%s"><span><span class="nm">%s</span><span class="wt">%s</span><span class="rw">%s</span></span>'
+                         '<span class="meter" role="img" aria-label="%s"><i style="width:%d%%"></i></span><span class="v">%s</span><span class="rk">%s</span>%s</div>'
+                         % (" nodata" if v is None else "", bandname, e(x["name"]), e(x.get("what")), e(x.get("raw")),
+                            "%s of 100" % v if v is not None else "no data", v or 0, v if v is not None else "–", rank(v),
+                            delta(v, pv) if v is not None and pv is not None else '<span class="delta"></span>'))
+            o.append("</div>")
+        o.append('<p class="note">These come from patterns in your transcripts, matched by simple rules, so some will be off. A habit you practise in words the rules don\'t recognise will read low. '
+                 'Not every bar should be full: pick two or three that fit the work you do.</p></div></section>')
+
     # two sessions
     ex = m.get("examples") or {}
     notes = c.get("session_notes") or {}
@@ -291,7 +388,7 @@ def main():
     o.append('<p class="note">Built only from transcripts on this computer. This file contains short, redacted snippets of your prompts, '
              'so keep it on your machine and don\'t attach it to tickets or chats.</p>')
     o.append("</div></section></main>")
-    o.append('<footer><div class="w">Generated by the agentic-coach skill, version 2.1. Scoring rules and sources: references/rubric.md in the skill folder. '
+    o.append('<footer><div class="w">Generated by the agentic-coach skill, version 2.2. Scoring rules and sources: references/rubric.md in the skill folder. '
              'Scores are rough estimates for your own learning. They are not a performance measure and should not be used to evaluate anyone.</div></footer>')
     o.append("<script>%s</script></body></html>" % JS)
 
