@@ -1,0 +1,11 @@
+{
+  "name": "agentic-coach",
+  "version": "2.1.0",
+  "description": "Reads your own Claude Code sessions, scores eight working habits and builds a local, interactive report with what to try next.",
+  "author": {
+    "name": "Moberg HR",
+    "url": "https://github.com/moberghr"
+  },
+  "repository": "https://github.com/moberghr/agentic-coach",
+  "license": "MIT"
+}
